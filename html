@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>터치 탭 카운트 게임</title>
+  <style>
+    :root{--bg:#f6fbff;--primary:#0b74d1;--accent:#1e90ff;--card:#ffffff}
+    html,body{height:100%;margin:0;font-family:Apple SD Gothic Neo,\"Noto Sans KR\",system-ui,Segoe UI,roboto,'Helvetica Neue',Arial}
+    body{display:flex;align-items:center;justify-content:center;background:linear-gradient(180deg,var(--bg),#eaf6ff);padding:20px}
+    .wrap{width:100%;max-width:540px;background:var(--card);border-radius:16px;box-shadow:0 8px 30px rgba(11,116,209,0.12);overflow:hidden}
+    header{background:linear-gradient(90deg,var(--primary),var(--accent));color:white;padding:18px 20px}
+    header h1{margin:0;font-size:18px}
+    .stage{padding:32px 20px;text-align:center}
+    .big{font-size:72px;font-weight:700;color:var(--primary);margin:8px 0}
+    .sub{font-size:18px;color:#245c8a;margin-bottom:18px}
+    .touch-area{height:260px;border-radius:12px;background:linear-gradient(180deg,#fff,#f1fbff);display:flex;align-items:center;justify-content:center;flex-direction:column;border:2px dashed rgba(11,116,209,0.12);margin:10px}
+    .hint{font-size:16px;color:#0b3b5e}
+    .controls{display:flex;gap:10px;justify-content:center;padding:18px}
+    button{background:var(--primary);color:white;border:none;padding:12px 16px;border-radius:10px;font-size:15px;cursor:pointer}
+    button.secondary{background:#fff;color:var(--primary);border:2px solid rgba(11,116,209,0.12)}
+    .result{padding:20px;background:linear-gradient(180deg,#f8feff,#ffffff);text-align:center}
+    .small{font-size:14px;color:#2b5878}
+    /* mobile large target */
+    @media (max-width:420px){.big{font-size:56px}.touch-area{height:220px}}
+  </style>
+</head>
+<body>
+  <div class="wrap" role="application">
+    <header>
+      <h1>3초 카운트다운 → 5초 탭 게임</h1>
+    </header>
+
+    <section class="stage" id="stage">
+      <div id="statusText" class="sub">준비하세요</div>
+      <div id="bigText" class="big">3</div>
+
+      <div class="touch-area" id="touchArea" aria-label="터치 영역" tabindex="0">
+        <div id="tapCount" style="font-size:42px;font-weight:700;color:var(--accent)">0</div>
+        <div class="hint" id="hint">화면을 터치하세요 (모바일/데스크톱 모두 가능)</div>
+      </div>
+
+      <div class="controls">
+        <button id="startBtn">시작</button>
+        <button id="resetBtn" class="secondary">초기화</button>
+      </div>
+
+      <div class="result" id="result" style="display:none">
+        <div style="font-size:20px;font-weight:700;color:var(--primary)" id="finalCount">0 탭</div>
+        <div class="small" id="finalMsg">결과를 확인하세요</div>
+      </div>
+    </section>
+  </div>
+
+<script>
+(function(){
+  const startBtn = document.getElementById('startBtn');
+  const resetBtn = document.getElementById('resetBtn');
+  const touchArea = document.getElementById('touchArea');
+  const bigText = document.getElementById('bigText');
+  const statusText = document.getElementById('statusText');
+  const tapCountEl = document.getElementById('tapCount');
+  const resultBox = document.getElementById('result');
+  const finalCount = document.getElementById('finalCount');
+  const hint = document.getElementById('hint');
+
+  let taps = 0;
+  let countdown = null;
+  let gameTimer = null;
+  let gameRunning = false;
+
+  const GAME_SECONDS = 5;
+  const COUNTDOWN_SECONDS = 3;
+
+  function setBigText(time){ bigText.textContent = time.toFixed(1); }
+  function updateTapDisplay(){ tapCountEl.textContent = taps; }
+
+  function animateCircle(){
+    tapCountEl.style.transform = 'scale(1.3)';
+    setTimeout(()=>{
+      tapCountEl.style.transform = 'scale(1)';
+    }, 150);
+  }
+
+  function startSequence(){
+    taps = 0; updateTapDisplay(); resultBox.style.display='none';
+    startBtn.disabled = true; resetBtn.disabled = true;
+    statusText.textContent = '카운트다운';
+
+    let t = COUNTDOWN_SECONDS;
+    setBigText(t);
+
+    countdown = setInterval(()=>{
+      t -= 0.1;
+      if(t > 0){ setBigText(t); }
+      else{
+        clearInterval(countdown);
+        beginGame();
+      }
+    }, 100);
+  }
+
+  function beginGame(){
+    gameRunning = true;
+    statusText.textContent = '게임 시작!';
+    let remaining = GAME_SECONDS;
+    setBigText(remaining);
+
+    gameTimer = setInterval(()=>{
+      remaining -= 0.1;
+      if(remaining >= 0) setBigText(remaining);
+      if(remaining <= 0){
+        endGame();
+      }
+    }, 100);
+
+    setTimeout(()=>{ if(gameRunning) endGame(); }, GAME_SECONDS*1000 + 50);
+  }
+
+  function endGame(){
+    gameRunning = false;
+    clearInterval(gameTimer);
+    setBigText(0);
+    statusText.textContent = '게임 종료';
+    finalCount.textContent = taps + ' 탭';
+    resultBox.style.display = 'block';
+    hint.textContent = '다시 시작하려면 시작 버튼을 누르세요.';
+    startBtn.disabled = false; resetBtn.disabled = false;
+  }
+
+  function resetAll(){
+    clearInterval(countdown); clearInterval(gameTimer);
+    taps = 0; updateTapDisplay(); gameRunning = false;
+    setBigText(COUNTDOWN_SECONDS);
+    statusText.textContent = '준비하세요';
+    resultBox.style.display='none';
+    hint.textContent = '원하면 즉시 시작하세요.';
+    startBtn.disabled = false; resetBtn.disabled = false;
+  }
+
+  function registerTap(e){
+    e.preventDefault();
+    if(!gameRunning) return;
+    taps += 1;
+    updateTapDisplay();
+    animateCircle();
+    if(navigator.vibrate) navigator.vibrate(20);
+  }
+
+  function keyTap(e){
+    if(e.code === 'Space' || e.code === 'Enter'){
+      e.preventDefault();
+      if(gameRunning){ taps += 1; updateTapDisplay(); animateCircle(); if(navigator.vibrate) navigator.vibrate(20); }
+    }
+  }
+
+  startBtn.addEventListener('click', startSequence);
+  resetBtn.addEventListener('click', resetAll);
+  touchArea.addEventListener('touchstart', registerTap, {passive:false});
+  touchArea.addEventListener('mousedown', registerTap);
+  window.addEventListener('keydown', keyTap);
+
+  resetAll();
+})();
+</script>
+</body>
+</html>
