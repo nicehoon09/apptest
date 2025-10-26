@@ -1,18 +1,444 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="ko">
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>핀볼 게임</title>
-<link rel="stylesheet" href="styles.css">
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>간단한 표적 사격 게임</title>
+<style>
+  :root{
+    --bg:#0f1724;
+    --panel:#0b1220;
+    --accent:#ff5c7c;
+    --muted:#9aa7b2;
+    --success:#7ef2b0;
+  }
+  html,body{height:100%;margin:0;font-family:Inter,Segoe UI,Roboto,'Noto Sans KR',sans-serif;background:linear-gradient(180deg,var(--bg),#07101a);}
+  .wrap{display:flex;flex-direction:column;align-items:center;gap:18px;padding:24px;min-height:100%;}
+  header{color:white;text-align:center;}
+  h1{margin:0;font-size:20px;}
+  .game-area{display:flex;gap:18px;align-items:flex-start;}
+  .panel{background:linear-gradient(180deg,rgba(255,255,255,0.02),transparent);border:1px solid rgba(255,255,255,0.04);padding:14px;border-radius:12px;color:#dbe7f0;box-shadow:0 6px 18px rgba(2,6,23,0.6);}
+  canvas{background:linear-gradient(180deg,#07202c,#04121a);border-radius:10px;display:block; cursor:crosshair;}
+  .hud{display:flex;flex-direction:column;gap:10px;width:220px;}
+  .stat{display:flex;justify-content:space-between;gap:8px;font-size:14px;color:var(--muted);}
+  .controls{display:flex;flex-direction:column;gap:8px;margin-top:6px;}
+  .row{display:flex;gap:8px;}
+  button, input[type=range]{background:transparent;border:1px solid rgba(255,255,255,0.06);color:white;padding:8px 10px;border-radius:8px;cursor:pointer;}
+  button:hover{border-color:rgba(255,255,255,0.12);}
+  .big{font-weight:600;font-size:20px;color:var(--accent);}
+  .small{font-size:12px;color:var(--muted);}
+  label{font-size:12px;color:var(--muted);}
+  .center{display:flex;align-items:center;justify-content:center;}
+  footer{color:var(--muted);font-size:12px;margin-top:12px;}
+  @media(max-width:720px){
+    .game-area{flex-direction:column;align-items:center;}
+    canvas{width:320px;height:480px;}
+  }
+</style>
 </head>
 <body>
-<h1>🎯 핀볼 게임</h1>
-<canvas id="gameCanvas" width="400" height="600"></canvas>
-<div id="scoreDisplay">점수: 0</div>
-<div id="controls">
-  <button id="resetBtn">게임 초기화</button>
+<div class="wrap">
+  <header class="panel" style="text-align:center;">
+    <h1>표적 사격 게임</h1>
+    <div class="small">화면을 클릭(또는 탭)해서 총을 쏘세요. 표적을 맞히면 점수 획득!</div>
+  </header>
+
+  <div class="game-area">
+    <div class="panel">
+      <canvas id="game" width="640" height="480"></canvas>
+    </div>
+
+    <div class="panel hud">
+      <div class="stat"><span>점수</span><span id="score" class="big">0</span></div>
+      <div class="stat"><span>남은 시간</span><span id="time" class="big">60</span></div>
+      <div class="stat"><span>명중 / 발사</span><span id="ratio" class="big">0 / 0</span></div>
+
+      <div class="controls">
+        <label>난이도 (표적 이동 속도)</label>
+        <input id="difficulty" type="range" min="0" max="4" step="1" value="2">
+        <div class="row">
+          <button id="startBtn">게임 시작</button>
+          <button id="restartBtn">재시작</button>
+        </div>
+        <div class="row">
+          <button id="autoTargetBtn">표적 자동이동: ON</button>
+          <button id="soundBtn">사운드: ON</button>
+        </div>
+        <div class="small">터치/모바일에서도 동작합니다. (브라우저에서 WebAudio 허용 필요)</div>
+      </div>
+    </div>
+  </div>
+
+  <footer class="panel">
+    <div>간단한 연습용 게임 — 자유롭게 수정하세요.</div>
+  </footer>
 </div>
-<script src="script.js"></script>
+
+<script>
+/*
+  간단 표적 사격 게임 스크립트
+  - 캔버스에서 클릭하면 총알 발사(탄속에 따라 이동)
+  - 표적은 원으로 그려지고, 명중 판정은 거리 비교
+  - WebAudio로 짧은 효과음 생성
+*/
+
+const canvas = document.getElementById('game');
+const ctx = canvas.getContext('2d', { alpha: false });
+
+let W = canvas.width, H = canvas.height;
+
+// 게임 상태
+let score = 0;
+let shots = 0;
+let hits = 0;
+let timeLeft = 60; // 초
+let running = false;
+let lastTime = 0;
+
+const ui = {
+  score: document.getElementById('score'),
+  time: document.getElementById('time'),
+  ratio: document.getElementById('ratio'),
+  difficulty: document.getElementById('difficulty'),
+  startBtn: document.getElementById('startBtn'),
+  restartBtn: document.getElementById('restartBtn'),
+  autoTargetBtn: document.getElementById('autoTargetBtn'),
+  soundBtn: document.getElementById('soundBtn'),
+};
+
+let difficulty = Number(ui.difficulty.value); // 0..4
+let autoTarget = true;
+let soundOn = true;
+
+// 사운드 준비 (간단한 톤)
+const AudioCtx = window.AudioContext || window.webkitAudioContext;
+let audioCtx = null;
+function playBeep(freq=800, time=0.06, type='sine', vol=0.08){
+  if(!soundOn) return;
+  if(!audioCtx) audioCtx = new AudioCtx();
+  const o = audioCtx.createOscillator();
+  const g = audioCtx.createGain();
+  o.type = type;
+  o.frequency.value = freq;
+  g.gain.value = vol;
+  o.connect(g);
+  g.connect(audioCtx.destination);
+  o.start();
+  g.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + time);
+  o.stop(audioCtx.currentTime + time + 0.02);
+}
+
+// 표적 객체
+class Target {
+  constructor(x,y,r){
+    this.x = x; this.y = y; this.r = r;
+    this.vx = 0; this.vy = 0;
+    this.moveTimer = 0; // 다음 이동까지 남은 시간
+  }
+  draw(ctx){
+    // 외곽원 + 링 디자인
+    ctx.save();
+    // 그림자 원
+    ctx.beginPath();
+    ctx.fillStyle = 'rgba(0,0,0,0.12)';
+    ctx.ellipse(this.x+6,this.y+6,this.r+8,this.r+8,0,0,Math.PI*2);
+    ctx.fill();
+    // 타겟 바탕
+    ctx.beginPath();
+    ctx.fillStyle = '#ffdde0';
+    ctx.arc(this.x,this.y,this.r+4,0,Math.PI*2);
+    ctx.fill();
+    // 빨간 중심
+    ctx.beginPath();
+    ctx.fillStyle = '#ff5c7c';
+    ctx.arc(this.x,this.y,this.r,0,Math.PI*2);
+    ctx.fill();
+    // 흰 링
+    ctx.beginPath();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = 'rgba(255,255,255,0.85)';
+    ctx.arc(this.x,this.y,this.r+10,0,Math.PI*2);
+    ctx.stroke();
+    ctx.restore();
+  }
+  update(dt){
+    // 위치 업데이트
+    this.x += this.vx * dt;
+    this.y += this.vy * dt;
+    // 경계 처리
+    if(this.x < this.r+10){ this.x = this.r+10; this.vx *= -1; }
+    if(this.x > W - (this.r+10)){ this.x = W - (this.r+10); this.vx *= -1; }
+    if(this.y < this.r+10){ this.y = this.r+10; this.vy *= -1; }
+    if(this.y > H - (this.r+10)){ this.y = H - (this.r+10); this.vy *= -1; }
+
+    // 자동 이동 타이밍
+    if(autoTarget){
+      this.moveTimer -= dt;
+      if(this.moveTimer <= 0){
+        this.setRandomVelocity();
+        // 난이도에 따라 다음 변경 시간
+        const base = 0.7 - difficulty * 0.12; // difficulty 높을수록 더 자주 변경
+        this.moveTimer = Math.max(0.2, base + (Math.random()-0.5)*0.5);
+      }
+    } else {
+      this.vx = this.vy = 0;
+    }
+  }
+  setRandomVelocity(){
+    // 속도 범위를 난이도에 연동
+    const speedBase = 40 + difficulty * 40; // px/s
+    const angle = Math.random()*Math.PI*2;
+    const s = speedBase * (0.6 + Math.random()*0.8);
+    this.vx = Math.cos(angle)*s;
+    this.vy = Math.sin(angle)*s;
+  }
+}
+
+// 총알 객체 (단순 선형)
+class Bullet {
+  constructor(x,y,dx,dy){
+    this.x = x; this.y = y;
+    this.dx = dx; this.dy = dy;
+    this.speed = 900; // px/s
+    this.alive = true;
+    this.travel = 0; // 이동거리
+    this.maxTravel = 1500;
+  }
+  update(dt){
+    const nx = this.x + this.dx * this.speed * dt;
+    const ny = this.y + this.dy * this.speed * dt;
+    this.travel += Math.hypot(nx - this.x, ny - this.y);
+    this.x = nx; this.y = ny;
+    if(this.travel > this.maxTravel) this.alive = false;
+    // 화면 밖이면 제거
+    if(this.x < -50 || this.x > W+50 || this.y < -50 || this.y > H+50) this.alive = false;
+  }
+  draw(ctx){
+    ctx.save();
+    ctx.beginPath();
+    ctx.strokeStyle = 'rgba(255,230,170,0.95)';
+    ctx.lineWidth = 3;
+    ctx.moveTo(this.x - this.dx*8, this.y - this.dy*8);
+    ctx.lineTo(this.x + this.dx*6, this.y + this.dy*6);
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+let target = new Target(W/2, H/3, 22);
+target.setRandomVelocity();
+let bullets = [];
+
+function resetGame(){
+  score = 0; shots = 0; hits = 0;
+  timeLeft = 60;
+  running = false;
+  bullets = [];
+  target = new Target(W/2, H/3, 22);
+  target.setRandomVelocity();
+  updateUI();
+}
+
+function startGame(){
+  if(!running){
+    running = true;
+    // restart timer
+    lastTime = performance.now();
+    requestAnimationFrame(loop);
+    playBeep(1200,0.05,'square',0.06);
+  }
+}
+
+function restartGame(){
+  resetGame();
+  startGame();
+}
+
+// UI 업데이트
+function updateUI(){
+  ui.score.textContent = score;
+  ui.time.textContent = Math.ceil(timeLeft);
+  ui.ratio.textContent = `${hits} / ${shots}`;
+  ui.autoTargetBtn.textContent = `표적 자동이동: ${autoTarget ? 'ON' : 'OFF'}`;
+  ui.soundBtn.textContent = `사운드: ${soundOn ? 'ON' : 'OFF'}`;
+}
+
+// 게임 루프
+function loop(ts){
+  const dt = Math.min(0.05, (ts - lastTime) / 1000);
+  lastTime = ts;
+
+  if(running){
+    // 시간 흐름
+    timeLeft -= dt;
+    if(timeLeft <= 0){
+      timeLeft = 0;
+      running = false;
+      playBeep(220,0.25,'sine',0.12);
+    }
+    // 업데이트
+    target.update(dt);
+    bullets.forEach(b => b.update(dt));
+    bullets = bullets.filter(b => b.alive);
+
+    // 충돌 확인 (각 bullet과 target)
+    bullets.forEach(b => {
+      if(!b.alive) return;
+      const dx = b.x - target.x;
+      const dy = b.y - target.y;
+      const dist = Math.hypot(dx,dy);
+      if(dist <= target.r + 6){ // 맞음
+        b.alive = false;
+        hits++;
+        shots = Math.max(shots, shots); // unchanged
+        score += Math.max(10, Math.round(100 - dist)); // 가까울수록 더점수
+        // 피격 이펙트: 잠시 표적을 튕기게
+        const ang = Math.atan2(dy,dx);
+        target.vx += Math.cos(ang) * 80;
+        target.vy += Math.sin(ang) * 80;
+        playBeep(1200, 0.06, 'sawtooth', 0.09);
+      }
+    });
+
+    updateUI();
+  }
+
+  draw();
+  // 프레임 반복
+  if(running) requestAnimationFrame(loop);
+}
+
+// 그리기
+function draw(){
+  // clear
+  ctx.clearRect(0,0,W,H);
+
+  // 배경 그라데이션 (이미 캔버스 배경 있음)
+  // HUD-like target indicator
+  target.draw(ctx);
+  bullets.forEach(b => b.draw(ctx));
+
+  // 남은 시간 시각적 바
+  const barW = 200, barH = 8;
+  const bx = 18, by = H - 26;
+  ctx.save();
+  ctx.fillStyle = 'rgba(255,255,255,0.06)';
+  ctx.fillRect(bx,by,barW,barH);
+  const pct = Math.max(0, timeLeft/60);
+  const g = ctx.createLinearGradient(bx,0,bx+barW,0);
+  g.addColorStop(0, '#7ef2b0'); g.addColorStop(1,'#ff5c7c');
+  ctx.fillStyle = g;
+  ctx.fillRect(bx,by,barW*pct,barH);
+  ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+  ctx.strokeRect(bx,by,barW,barH);
+  ctx.restore();
+
+  // 중앙 십자선
+  ctx.save();
+  ctx.strokeStyle = 'rgba(255,255,255,0.04)';
+  ctx.beginPath();
+  ctx.moveTo(W/2, 0); ctx.lineTo(W/2, H);
+  ctx.moveTo(0, H/2); ctx.lineTo(W, H/2);
+  ctx.stroke();
+  ctx.restore();
+
+  // 게임 오버 화면
+  if(!running && timeLeft <= 0){
+    ctx.save();
+    ctx.fillStyle = 'rgba(2,6,12,0.6)';
+    ctx.fillRect(0,0,W,H);
+    ctx.fillStyle = '#fff';
+    ctx.font = 'bold 36px system-ui,Segoe UI,Roboto';
+    ctx.textAlign = 'center';
+    ctx.fillText('게임 종료', W/2, H/2 - 20);
+    ctx.font = '16px system-ui,Segoe UI,Roboto';
+    ctx.fillText(`점수: ${score}   명중/발사: ${hits}/${shots}`, W/2, H/2 + 10);
+    ctx.restore();
+  }
+}
+
+// 입력: 클릭/터치로 발사
+function getCanvasPos(e){
+  const rect = canvas.getBoundingClientRect();
+  let clientX, clientY;
+  if(e.touches){
+    clientX = e.touches[0].clientX;
+    clientY = e.touches[0].clientY;
+  } else {
+    clientX = e.clientX;
+    clientY = e.clientY;
+  }
+  return {
+    x: (clientX - rect.left) * (canvas.width / rect.width),
+    y: (clientY - rect.top) * (canvas.height / rect.height)
+  };
+}
+
+function fireAt(clientEvent){
+  if(!running) return;
+  const p = getCanvasPos(clientEvent);
+  // 총구 위치은 화면 하단 중앙 (플레이어 위치)
+  const sx = W/2;
+  const sy = H - 30;
+  const dx = p.x - sx;
+  const dy = p.y - sy;
+  const dlen = Math.hypot(dx,dy) || 1;
+  const ndx = dx / dlen;
+  const ndy = dy / dlen;
+
+  const b = new Bullet(sx + ndx*16, sy + ndy*16, ndx, ndy);
+  bullets.push(b);
+  shots++;
+  playBeep(1500, 0.03, 'triangle', 0.07);
+  updateUI();
+}
+
+// 마우스 / 터치 이벤트
+canvas.addEventListener('mousedown', (e) => { fireAt(e); });
+canvas.addEventListener('touchstart', (e) => { e.preventDefault(); fireAt(e); }, {passive:false});
+
+// 시작 / 재시작 버튼
+ui.startBtn.addEventListener('click', () => {
+  startGame();
+});
+ui.restartBtn.addEventListener('click', () => {
+  restartGame();
+});
+
+// 난이도 변경
+ui.difficulty.addEventListener('input', (e) => {
+  difficulty = Number(e.target.value);
+});
+
+// 자동 이동 토글
+ui.autoTargetBtn.addEventListener('click', () => {
+  autoTarget = !autoTarget;
+  updateUI();
+});
+
+// 사운드 토글
+ui.soundBtn.addEventListener('click', () => {
+  soundOn = !soundOn;
+  updateUI();
+});
+
+// 윈도우 리사이즈: 캔버스 비율 유지 (고정 해상도 유지하려면 필요없음)
+// 여기선 디자인상 캔버스를 고정 해상도로 유지하지만, 화면 사이즈에 맞춰 스케일링
+function resizeCanvas(){
+  // CSS 크기와 내부 해상도 맞추기 (고DPI 대응)
+  const rect = canvas.getBoundingClientRect();
+  const dpr = window.devicePixelRatio || 1;
+  // 원하는 내부 해상도는 기본 width/height attributes 사용 (640x480)
+  // 여기서는 자동으로 CSS 크기를 유지하므로 별도 설정은 하지 않음
+  // 그러나 캔버스 비율이 바뀌면 내부 프로젝션 조정 가능
+}
+window.addEventListener('resize', resizeCanvas);
+
+// 초기화
+resetGame();
+draw(); // 초기 화면
+updateUI();
+
+</script>
 </body>
 </html>
